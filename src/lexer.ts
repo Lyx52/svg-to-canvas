@@ -130,7 +130,15 @@ export class DrawnLexer {
             current = this.peek();
         }
 
+        let hasDot = false;
+
         while (current && (this.isNumeric(current) || this.isDot(current))) {
+            if (hasDot && this.isDot(current)) {
+                break;
+            }
+
+            hasDot = hasDot || this.isDot(current);
+
             buffer += this.pop();
             current = this.peek();
         }

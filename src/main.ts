@@ -1,5 +1,5 @@
 import './style.css'
-import {CodeGen} from "./codegen.ts";
+import {CodeGen, type IGradientStop} from "./codegen.ts";
 import {DrawnLexer, TokenType} from "./lexer.ts";
 import {TransformContext} from "./transform.ts";
 
@@ -91,6 +91,7 @@ const parseDrawn = (drawn: string, ctx: TransformContext): ISvgCommand[] => {
                 commands.push({ command: "stroke" });
             } break;
             case TokenType.DeltaLineTo: {
+                console.log(token.value)
                 const dy= Number(token.value?.pop());
                 const dx= Number(token.value?.pop());
 
@@ -145,7 +146,7 @@ const parseDrawn = (drawn: string, ctx: TransformContext): ISvgCommand[] => {
                         ctx.x0 + dx2, ctx.y0 + dy2,
                     ],
                 } as ISvgCommand);
-
+                ctx.translate(ctx.x0 + dx2, ctx.y0 + dy2);
                 commands.push({ command: "stroke" });
             } break;
 
@@ -167,7 +168,7 @@ const parseDrawn = (drawn: string, ctx: TransformContext): ISvgCommand[] => {
                         dx2, dy2,
                     ],
                 } as ISvgCommand)
-
+                ctx.translate(dx2, dy2);
                 commands.push({ command: "stroke" });
             } break;
             case TokenType.CloseSubpath:
@@ -182,9 +183,78 @@ const parseDrawn = (drawn: string, ctx: TransformContext): ISvgCommand[] => {
     return commands;
 }
 
+const parseCommonAttributes = (attributes: NamedNodeMap, codeGen: CodeGen, ctx: TransformContext) => {
+    for (const attrib of attributes) {
+        switch (attrib.name) {
+            case 'fill': {
+                if (attrib.value.startsWith('url')) {
+                    const id = attrib.value
+                        .replace(/url\(/, '')
+                        .replace(/^#/, '')
+                        .replace(/\)$/, '');
 
-const parse = (element: Element, codeGen: CodeGen, ctx: TransformContext) => {
+                    codeGen.vars('fillStyle', codeGen.getGradientVar(id), true);
+                } else {
+                    codeGen.vars('fillStyle', attrib.value);
+                }
+            } break;
+        }
+    }
+}
+
+const parseDefs = (elems: HTMLCollection, codeGen: CodeGen, ctx: TransformContext) => {
+    for (const elem of elems) {
+        switch (elem.tagName) {
+            case 'linearGradient': {
+                // ctx.createLinearGradient(x1, y1, x2, y2)
+                const id = elem.getAttribute('id')!;
+                const x1 = Number(elem.getAttribute('x1') ?? 0);
+                const y1 = Number(elem.getAttribute('y1') ?? 0);
+                const x2 = Number(elem.getAttribute('x2') ?? 0);
+                const y2 = Number(elem.getAttribute('y2') ?? 0);
+                const stops = [];
+                for (const stop of elem.querySelectorAll('stop')) {
+                    stops.push({
+                        stopColor: stop.getAttribute('stop-color'),
+                        offset: Number(stop.getAttribute('offset') ?? 0),
+                    } as IGradientStop)
+                }
+                codeGen.linearGradient(id, x1, y1, x2, y2, ...stops);
+
+
+                console.log(elem)
+            } break;
+        }
+    }
+}
+
+const parse = (element: Element|null|undefined, codeGen: CodeGen, ctx: TransformContext) => {
+    if (!element) {
+        return;
+    }
+
     switch (element.tagName) {
+        case 'svg': {
+            for (const attrib of element.attributes) {
+                switch (attrib.name) {
+                    case 'width': {
+                        codeGen.width = Number(attrib.value);
+                    } break;
+                    case 'height': {
+                        codeGen.height = Number(attrib.value);
+                    } break;
+                }
+            }
+            const defs = element.querySelectorAll('defs');
+            for (const def of defs) {
+                parseDefs(def.children, codeGen, ctx);
+                def.remove();
+            }
+            parseCommonAttributes(element.attributes, codeGen, ctx);
+        } break;
+        case 'g': {
+
+        } break;
         case 'path': {
             codeGen.func('beginPath');
             for (const attrib of element.attributes) {
@@ -194,19 +264,18 @@ const parse = (element: Element, codeGen: CodeGen, ctx: TransformContext) => {
                             codeGen.func(command.command, command.params ?? []);
                         }
                     } break;
-                    case 'fill': {
-                        codeGen.vars('fillStyle', attrib.value);
-                    } break;
                 }
             }
 
-
+            parseCommonAttributes(element.attributes, codeGen, ctx);
             codeGen.func('fill');
             codeGen.func('closePath');
         }
     }
 
-    return '';
+    for (const child of element.children) {
+        parse(child, codeGen, ctx);
+    }
 }
 
 (async () => {
@@ -215,29 +284,11 @@ const parse = (element: Element, codeGen: CodeGen, ctx: TransformContext) => {
     if (!ctx) {
         return;
     }
-
-    // ctx.beginPath();
-    // ctx.fillStyle = '#000000';
-    // ctx.translate(25, 25)
-    // ctx.fillRect(0, 0, 50, 50);
-    // ctx.translate(25, 30)
-    // ctx.fillRect(0, 0, 50, 50);
-    //
-    // ctx.restore();
-    // ctx.resetTransform();
-    // ctx.beginPath();
-    // ctx.fillStyle = '#fff';
-    // ctx.fillRect(0, 0, 50, 50);
-    // ctx.restore();
-    //
-    // ctx.bezierCurveTo()
-    const codegen = new CodeGen('ctx');
+    const codegen = new CodeGen();
     const transform = new TransformContext();
 
-    const xml = await getSvg('/public/icon.svg');
-    for (const elem of xml?.querySelector('g')?.children ?? []) {
-        parse(elem, codegen, transform);
-    }
+    const xml = await getSvg('/public/large.svg');
+    parse(xml, codegen, transform);
     console.log(codegen.toString())
     const result = eval(codegen.toString());
     document.getElementById('xxx')?.setAttribute('src', result);
